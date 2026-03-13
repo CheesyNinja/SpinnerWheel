@@ -1,7 +1,6 @@
 import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import random
 import time
 
@@ -13,118 +12,99 @@ if 'options_data' not in st.session_state:
         {"name": "Option 3", "prob": 33.34, "locked": False},
     ]
 
-st.set_page_config(page_title="Proportional Smart Wheel", layout="wide")
-st.title("🎡 Proportional Smart Wheel")
+st.set_page_config(page_title="Smart Proportional Wheel", layout="wide")
 
 
-# --- HELPER FUNCTIONS ---
-def equalize_weights(force_all=False):
+# --- CORE MATH LOGIC ---
+
+def rebalance_proportionally(target_idx=None, new_val=None, adding_new=False):
+    """
+    Adjusts all unlocked slices so they maintain their relative ratios
+    while fitting into the available space.
+    """
     data = st.session_state.options_data
-    n = len(data)
-    if force_all:
-        avg = 100.0 / n
-        for item in data:
-            item['prob'] = avg
-            item['locked'] = False
-    else:
-        unlocked = [i for i, x in enumerate(data) if not x['locked']]
-        if not unlocked: return
-        locked_total = sum(x['prob'] for x in data if x['locked'])
-        available = max(0, 100.0 - locked_total)
-        avg_available = available / len(unlocked)
-        for i in unlocked:
-            data[i]['prob'] = avg_available
+
+    if adding_new:
+        # 1. Calculate the 'Fair Share' for the new count
+        new_count = len(data)
+        target_share = 100.0 / new_count
+
+        # 2. Identify existing unlocked slices (excluding the brand new one at the end)
+        unlocked_indices = [i for i, x in enumerate(data[:-1]) if not x['locked']]
+        locked_total = sum(x['prob'] for i, x in enumerate(data[:-1]) if x['locked'])
+
+        # 3. How much room is left after the new slice and locked slices?
+        remaining_space = 100.0 - target_share - locked_total
+
+        # 4. Total 'weight' of currently unlocked slices
+        current_unlocked_sum = sum(data[i]['prob'] for i in unlocked_indices)
+
+        # 5. Scale them
+        if current_unlocked_sum > 0:
+            multiplier = remaining_space / current_unlocked_sum
+            for i in unlocked_indices:
+                data[i]['prob'] = round(data[i]['prob'] * multiplier, 2)
+
+        # 6. Set the new slice to its fair share
+        data[-1]['prob'] = round(target_share, 2)
+
+    elif target_idx is not None:
+        # Logic for when a user manually changes a specific number
+        unlocked_others = [i for i, x in enumerate(data) if not x['locked'] and i != target_idx]
+        locked_total = sum(x['prob'] for i, x in enumerate(data) if x['locked'] or i == target_idx)
+
+        remaining_space = 100.0 - locked_total
+        current_unlocked_sum = sum(data[i]['prob'] for i in unlocked_others)
+
+        if unlocked_others and current_unlocked_sum > 0:
+            multiplier = remaining_space / current_unlocked_sum
+            for i in unlocked_others:
+                data[i]['prob'] = round(data[i]['prob'] * multiplier, 2)
+        elif unlocked_others:
+            # If others were 0, split remaining space equally
+            for i in unlocked_others:
+                data[i]['prob'] = round(remaining_space / len(unlocked_others), 2)
 
 
-def add_option():
-    st.session_state.options_data.append({"name": f"New Option", "prob": 0.0, "locked": False})
-    equalize_weights()
-
-
-# --- SIDEBAR CONTROLS ---
-st.sidebar.header("Wheel Settings")
-
-if st.sidebar.button("➕ Add Option"):
-    add_option()
-
-if st.sidebar.button("⚖️ Equalize (All)"):
-    equalize_weights(force_all=True)
-
-if st.sidebar.button("🧹 Clear/Reset"):
-    st.session_state.options_data = [
-        {"name": "Option 1", "prob": 50.0, "locked": False},
-        {"name": "Option 2", "prob": 50.0, "locked": False},
-    ]
-
-# --- MAIN INTERFACE ---
+# --- UI LAYOUT ---
 col1, col2 = st.columns([1, 2])
 
 with col1:
-    st.subheader("Configure Slices")
-    to_delete = None
+    st.subheader("Settings")
 
-    # Render dynamic inputs
+    # Add Option Button
+    if st.button("➕ Add Option (Auto-Balance)"):
+        st.session_state.options_data.append(
+            {"name": f"Option {len(st.session_state.options_data) + 1}", "prob": 0.0, "locked": False})
+        rebalance_proportionally(adding_new=True)
+        st.rerun()
+
+    # Inputs for slices
     for i, item in enumerate(st.session_state.options_data):
-        c1, c2, c3, c4 = st.columns([1, 4, 2, 1])
-
-        # Lock toggle
+        c1, c2, c3 = st.columns([1, 4, 2])
         item['locked'] = c1.checkbox("🔒", value=item['locked'], key=f"lock_{i}")
+        item['name'] = c2.text_input(f"n_{i}", value=item['name'], key=f"name_{i}", label_visibility="collapsed")
 
-        # Name input
-        item['name'] = c2.text_input(f"Label {i}", value=item['name'], key=f"name_{i}", label_visibility="collapsed")
+        # If user changes probability manually
+        prev_val = item['prob']
+        new_val = c3.number_input(f"%", value=float(item['prob']), key=f"p_{i}", label_visibility="collapsed")
 
-        # Probability input
-        new_val = c3.number_input(f"%", value=float(item['prob']), key=f"prob_{i}", label_visibility="collapsed",
-                                  step=1.0)
-        item['prob'] = new_val
-
-        # Delete button
-        if c4.button("🗑️", key=f"del_{i}"):
-            to_delete = i
-
-    if to_delete is not None:
-        st.session_state.options_data.pop(to_delete)
-        st.rerun()
-
-    if st.button("🔄 Update & Re-balance Wheel"):
-        equalize_weights()
-        st.rerun()
+        if new_val != prev_val:
+            st.session_state.options_data[i]['prob'] = new_val
+            rebalance_proportionally(target_idx=i)
+            st.rerun()
 
 with col2:
-    # --- PLOTTING ---
+    # --- CHARTING ---
     labels = [x['name'] for x in st.session_state.options_data]
     sizes = [x['prob'] for x in st.session_state.options_data]
 
-    fig, ax = plt.subplots(figsize=(6, 6))
-    # Use a nice color map
-    colors = plt.cm.tab10(np.linspace(0, 1, len(labels)))
-
-    wedges, texts, autotexts = ax.pie(
-        sizes, labels=labels, autopct='%1.1f%%',
-        startangle=90, colors=colors,
-        textprops={'weight': 'bold'}
-    )
+    fig, ax = plt.subplots()
+    ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, colors=plt.cm.Pastel1.colors)
     ax.axis('equal')
     st.pyplot(fig)
 
-    # --- SPIN LOGIC ---
-    if st.button("🔥 SPIN THE WHEEL", use_container_width=True):
-        with st.spinner("Spinning..."):
-            time.sleep(1.5)  # Fake "spinning" delay
-
-            # Weighted random choice
-            options = [x['name'] for x in st.session_state.options_data]
-            weights = [x['prob'] for x in st.session_state.options_data]
-
-            if sum(weights) > 0:
-                winner = random.choices(options, weights=weights, k=1)[0]
-                st.balloons()
-                st.success(f"### The Winner is: **{winner}**")
-            else:
-                st.error("Total percentage must be greater than 0!")
-
-# --- CSV EXPORT ---
-st.sidebar.markdown("---")
-df = pd.DataFrame(st.session_state.options_data)
-csv = df.to_csv(index=False).encode('utf-8')
-st.sidebar.download_button("📥 Download Configuration", data=csv, file_name="wheel_config.csv", mime="text/csv")
+    if st.button("SPIN", use_container_width=True):
+        winner = random.choices(labels, weights=sizes, k=1)[0]
+        st.balloons()
+        st.success(f"Winner: {winner}")
