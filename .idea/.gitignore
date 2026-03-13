@@ -3,4 +3,8 @@
 /workspace.xml
 # Editor-based HTTP Client requests
 /httpRequests/
-.idea/
+/misc.xml
+/vcs.xml
+/inspectionProfiles/profiles_settings.xml
+/modules.xml
+/Messing Around With Wheel.iml
